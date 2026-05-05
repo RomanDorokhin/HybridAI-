@@ -29,12 +29,13 @@ export function ModelLoader({ progress }: ModelLoaderProps) {
               {isError
                 ? "Error Loading Model"
                 : isDownloading
-                ? "Downloading Llama 3.2"
-                : "Loading Llama 3.2"}
+                ? "Downloading Qwen 2.5"
+                : "Loading Qwen 2.5"}
             </h3>
             <p className="text-xs text-muted-foreground">
-              {isDownloading ? "~1.6 GB download, cached for future use" : "Initializing WebGPU engine"}
+              {isDownloading ? "~500 MB download, cached for future use" : "Initializing WebGPU engine"}
             </p>
+
           </div>
         </div>
 

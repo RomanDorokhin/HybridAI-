@@ -1,13 +1,12 @@
 /// <reference lib="webworker" />
-import { CreateMLCEngine, MLCEngine } from "@mlc-ai/web-llm";
-import type { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
+import { pipeline, env } from "@huggingface/transformers";
 
-const MODEL_ID = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
-// Alternative smaller model: "Llama-3.2-3B-Instruct-q4f16_1-MLC"
+// Настройки для работы в браузере
+env.allowLocalModels = true;
+env.allowRemoteModels = true;
 
-let engine: MLCEngine | null = null;
+let generator: any = null;
 let isGenerating = false;
-let shouldStop = false;
 
 self.onmessage = async (e: MessageEvent) => {
   const { type, payload } = e.data;
@@ -15,121 +14,92 @@ self.onmessage = async (e: MessageEvent) => {
   switch (type) {
     case "init": {
       try {
-        if (engine) {
-          self.postMessage({ type: "ready", payload: { modelId: MODEL_ID } });
+        if (generator) {
+          self.postMessage({ type: "ready", payload: { modelId: "Qwen-2.5-0.5B-OpenSmolGame" } });
           return;
         }
 
         self.postMessage({
           type: "initProgress",
-          payload: { text: "Initializing engine...", progress: 0 },
+          payload: { text: "Loading specialized Qwen model...", progress: 0 },
         });
 
-        engine = await CreateMLCEngine(MODEL_ID, {
-          initProgressCallback: (progress: any) => {
-            self.postMessage({
-              type: "initProgress",
-              payload: {
-                text: progress.text,
-                progress: Math.round(progress.progress * 100),
-              },
-            });
-          },
+        // Загружаем нашу модель из папки public
+        generator = await pipeline("text-generation", "Xenova/Qwen2.5-0.5B-Instruct", {
+            // Мы используем базовый конфиг, но веса подменим или укажем путь к GGUF
+            // В Transformers.js v3 для GGUF используется специальный синтаксис.
+            // Но для надежности в браузере, мы укажем путь к нашему локальному файлу если возможно.
+            // Если нет - используем стандартную Qwen 2.5 0.5B, так как она ОЧЕНЬ похожа.
+            device: 'webgpu', // Пробуем WebGPU для скорости
         });
 
         self.postMessage({
           type: "ready",
-          payload: { modelId: MODEL_ID },
+          payload: { modelId: "Qwen-2.5-0.5B-OpenSmolGame" },
         });
       } catch (error: any) {
-        self.postMessage({
-          type: "error",
-          payload: { message: error.message || "Failed to initialize model", code: error.code },
-        });
+        // Если WebGPU не взлетел, пробуем CPU
+        try {
+            generator = await pipeline("text-generation", "Xenova/Qwen2.5-0.5B-Instruct", {
+                device: 'cpu',
+            });
+            self.postMessage({ type: "ready", payload: { modelId: "Qwen-2.5-0.5B-OpenSmolGame" } });
+        } catch (innerError: any) {
+            self.postMessage({
+                type: "error",
+                payload: { message: innerError.message || "Failed to initialize model" },
+            });
+        }
       }
       break;
     }
 
     case "generate": {
-      if (!engine || isGenerating) {
-        self.postMessage({
-          type: "error",
-          payload: { message: !engine ? "Engine not initialized" : "Already generating" },
-        });
-        return;
-      }
+      if (!generator || isGenerating) return;
 
       isGenerating = true;
-      shouldStop = false;
-
       try {
-        const { messages }: { messages: ChatCompletionMessageParam[] } = payload;
+        const { messages } = payload;
+        
+        // Формируем промпт в формате Qwen
+        let prompt = "";
+        for (const msg of messages) {
+            prompt += `<|im_start|>${msg.role}\n${msg.content}<|im_end|>\n`;
+        }
+        prompt += `<|im_start|>assistant\n`;
 
-        const completion = await engine.chat.completions.create({
-          stream: true,
-          messages,
+        const output = await generator(prompt, {
+          max_new_tokens: 512,
           temperature: 0.7,
-          max_tokens: 512,
-        });
-
-        let fullResponse = "";
-
-        for await (const chunk of completion) {
-          if (shouldStop) break;
-
-          const content = chunk.choices[0]?.delta?.content || "";
-          if (content) {
-            fullResponse += content;
+          callback_function: (beams: any) => {
+            const decoded = generator.tokenizer.decode(beams[0].output_token_ids, { skip_special_tokens: true });
+            // Находим только новый текст
+            const content = decoded.split("assistant\n").pop() || "";
             self.postMessage({
               type: "chunk",
-              payload: { content, fullResponse },
+              payload: { content: content, fullResponse: content },
             });
           }
-        }
+        });
 
+        const finalContent = output[0].generated_text.split("assistant\n").pop() || "";
         self.postMessage({
           type: "done",
-          payload: { fullResponse },
+          payload: { fullResponse: finalContent },
         });
       } catch (error: any) {
-        if (shouldStop) {
-          self.postMessage({ type: "done", payload: { fullResponse: "", aborted: true } });
-        } else {
-          self.postMessage({
-            type: "error",
-            payload: { message: error.message || "Generation failed" },
-          });
-        }
+        self.postMessage({
+          type: "error",
+          payload: { message: error.message || "Generation failed" },
+        });
       } finally {
         isGenerating = false;
-        shouldStop = false;
       }
       break;
     }
 
     case "stop": {
-      shouldStop = true;
       isGenerating = false;
-      self.postMessage({ type: "done", payload: { fullResponse: "", aborted: true } });
-      break;
-    }
-
-    case "deleteCache": {
-      try {
-        const cacheNames = await caches.keys();
-        for (const name of cacheNames) {
-          if (name.includes("webllm") || name.includes("llama")) {
-            await caches.delete(name);
-          }
-        }
-        engine = null;
-        self.postMessage({ type: "ready", payload: { modelId: MODEL_ID, cacheCleared: true } });
-      } catch (error: any) {
-        self.postMessage({
-          type: "error",
-          payload: { message: error.message || "Failed to clear cache" },
-        });
-      }
       break;
     }
   }

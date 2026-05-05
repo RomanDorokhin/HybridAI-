@@ -63,7 +63,7 @@ export default function Home() {
           </Button>
           <div className="flex items-center gap-2 flex-1">
             <Sparkles className="w-5 h-5 text-primary" />
-            <h1 className="font-semibold text-foreground">Llama 3.2 Chat</h1>
+            <h1 className="font-semibold text-foreground">Qwen 2.5 Chat</h1>
             {isModelReady && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-500/15 text-green-500 text-xs font-medium">
                 <Zap size={10} />
@@ -95,10 +95,10 @@ export default function Home() {
                     <Sparkles className="w-8 h-8 text-primary" />
                   </div>
                   <h2 className="text-2xl font-bold text-foreground mb-2">
-                    Llama 3.2
+                    OpenSmolGame Agent
                   </h2>
                   <p className="text-muted-foreground text-center max-w-md mb-8">
-                    A powerful AI assistant running entirely in your browser.
+                    Specialized AI assistant for game coding and protocol design.
                     Your conversations stay private — no data ever leaves your device.
                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">

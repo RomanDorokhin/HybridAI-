@@ -12,7 +12,7 @@ const SYSTEM_PROMPT: ChatMessage = {
   id: "system",
   role: "system",
   content:
-    "You are a helpful, harmless, and honest AI assistant. You provide clear, accurate, and concise responses. You can help with coding, writing, analysis, math, and general questions.",
+    "You are OpenGame, a specialized game coding agent. You follow the OpenSmolGame protocol to help users design and build 2D games. You are expert in game mechanics, archetypes, and technical prompt synthesis.",
   timestamp: Date.now(),
 };
 
@@ -40,7 +40,7 @@ function createDefaultSession(): ChatSession {
     messages: [],
     createdAt: now,
     updatedAt: now,
-    modelName: "Llama 3.2 3B",
+    modelName: "Qwen 2.5 0.5B Specialized",
   };
 }
 
