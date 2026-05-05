@@ -66,7 +66,7 @@ export function ChatSidebar({
         <div className="flex items-center justify-between p-4 border-b border-sidebar-border">
           <div className="flex items-center gap-2">
             <Cpu className="w-5 h-5 text-sidebar-primary" />
-            <h2 className="font-semibold text-sidebar-foreground">Llama 3.2</h2>
+            <h2 className="font-semibold text-sidebar-foreground">OpenSmolGame Agent</h2>
           </div>
           <Button
             variant="ghost"
@@ -184,7 +184,7 @@ export function ChatSidebar({
           </div>
 
           <div className="px-2 text-[10px] text-sidebar-foreground/40">
-            Model: Llama 3.2 3B (Q4) &middot; Running locally in browser
+            Model: Qwen 2.5 0.5B (INT8) &middot; Running locally in browser
           </div>
         </div>
       </aside>

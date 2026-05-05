@@ -41,7 +41,7 @@ export function ChatMessageItem({ message, onRetry }: ChatMessageItemProps) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1.5">
           <span className="text-sm font-medium text-foreground">
-            {isUser ? "You" : "Llama 3.2"}
+            {isUser ? "You" : "OpenSmolGame Agent"}
           </span>
           <span className="text-xs text-muted-foreground">
             {new Date(message.timestamp).toLocaleTimeString([], {

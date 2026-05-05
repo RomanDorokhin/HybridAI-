@@ -46,7 +46,7 @@ export function ChatInput({ onSend, onStop, isGenerating, disabled }: ChatInputP
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={disabled ? "Loading model..." : "Message Llama 3.2..."}
+            placeholder={disabled ? "Loading model..." : "Message OpenSmolGame Agent..."}
             disabled={disabled || isGenerating}
             className="min-h-[44px] max-h-[200px] bg-transparent border-0 resize-none focus-visible:ring-0 focus-visible:ring-offset-0 px-3 py-2.5 text-sm"
             rows={1}
@@ -77,7 +77,7 @@ export function ChatInput({ onSend, onStop, isGenerating, disabled }: ChatInputP
           )}
         </div>
         <p className="text-xs text-muted-foreground text-center mt-2">
-          Llama 3.2 runs entirely in your browser. Your messages never leave this device.
+          OpenSmolGame Agent runs entirely in your browser. Your messages never leave this device.
         </p>
       </div>
     </div>
