@@ -25,13 +25,10 @@ self.onmessage = async (e: MessageEvent) => {
         });
 
         // Загружаем нашу модель из папки public
-        generator = await pipeline("text-generation", "Xenova/Qwen2.5-0.5B-Instruct", {
-            // Мы используем базовый конфиг, но веса подменим или укажем путь к GGUF
-            // В Transformers.js v3 для GGUF используется специальный синтаксис.
-            // Но для надежности в браузере, мы укажем путь к нашему локальному файлу если возможно.
-            // Если нет - используем стандартную Qwen 2.5 0.5B, так как она ОЧЕНЬ похожа.
+        generator = await pipeline("text-generation", "/model.gguf", {
             device: 'webgpu', // Пробуем WebGPU для скорости
         });
+
 
         self.postMessage({
           type: "ready",
@@ -40,9 +37,10 @@ self.onmessage = async (e: MessageEvent) => {
       } catch (error: any) {
         // Если WebGPU не взлетел, пробуем CPU
         try {
-            generator = await pipeline("text-generation", "Xenova/Qwen2.5-0.5B-Instruct", {
+            generator = await pipeline("text-generation", "/model.gguf", {
                 device: 'cpu',
             });
+
             self.postMessage({ type: "ready", payload: { modelId: "Qwen-2.5-0.5B-OpenSmolGame" } });
         } catch (innerError: any) {
             self.postMessage({
