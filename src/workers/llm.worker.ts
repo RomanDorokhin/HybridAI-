@@ -4,6 +4,7 @@ import { pipeline, env } from "@huggingface/transformers";
 // Настройки для работы в браузере
 env.allowLocalModels = true;
 env.allowRemoteModels = true;
+env.localModelPath = "/"; // Ищем модели от корня сайта
 
 let generator: any = null;
 let isGenerating = false;
@@ -15,35 +16,32 @@ self.onmessage = async (e: MessageEvent) => {
     case "init": {
       try {
         if (generator) {
-          self.postMessage({ type: "ready", payload: { modelId: "Qwen-2.5-0.5B-OpenSmolGame" } });
+          self.postMessage({ type: "ready", payload: { modelId: "Qwen-2.5-0.5B-ONNX" } });
           return;
         }
 
         self.postMessage({
           type: "initProgress",
-          payload: { text: "Loading specialized Qwen model...", progress: 0 },
+          payload: { text: "Loading optimized ONNX model...", progress: 0 },
         });
 
-        // Загружаем нашу модель из хранилища GitHub LFS
-        generator = await pipeline("text-generation", "https://media.githubusercontent.com/media/RomanDorokhin/HybridAI-/main/models/model.gguf", {
-            device: 'webgpu', // Пробуем WebGPU для скорости
+        // Загружаем нашу ONNX модель из папки public/models/qwen-onnx
+        generator = await pipeline("text-generation", "models/qwen-onnx", {
+            device: 'webgpu', // Пробуем WebGPU
+            dtype: 'fp32',    // Для квантованной модели указываем базу
         });
-
-
 
         self.postMessage({
           type: "ready",
-          payload: { modelId: "Qwen-2.5-0.5B-OpenSmolGame" },
+          payload: { modelId: "Qwen-2.5-0.5B-ONNX" },
         });
       } catch (error: any) {
-        // Если WebGPU не взлетел, пробуем CPU
+        console.error("WebGPU failed, falling back to CPU", error);
         try {
-            generator = await pipeline("text-generation", "https://media.githubusercontent.com/media/RomanDorokhin/HybridAI-/main/models/model.gguf", {
+            generator = await pipeline("text-generation", "models/qwen-onnx", {
                 device: 'cpu',
             });
-
-
-            self.postMessage({ type: "ready", payload: { modelId: "Qwen-2.5-0.5B-OpenSmolGame" } });
+            self.postMessage({ type: "ready", payload: { modelId: "Qwen-2.5-0.5B-ONNX" } });
         } catch (innerError: any) {
             self.postMessage({
                 type: "error",
@@ -71,9 +69,9 @@ self.onmessage = async (e: MessageEvent) => {
         const output = await generator(prompt, {
           max_new_tokens: 512,
           temperature: 0.7,
+          do_sample: true,
           callback_function: (beams: any) => {
             const decoded = generator.tokenizer.decode(beams[0].output_token_ids, { skip_special_tokens: true });
-            // Находим только новый текст
             const content = decoded.split("assistant\n").pop() || "";
             self.postMessage({
               type: "chunk",
