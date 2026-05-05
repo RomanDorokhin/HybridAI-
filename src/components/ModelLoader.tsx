@@ -53,9 +53,20 @@ export function ModelLoader({ progress }: ModelLoaderProps) {
         )}
 
         {isError && (
-          <div className="bg-destructive/10 rounded-lg p-3 mt-2">
-            <p className="text-sm text-destructive">{text}</p>
-            <p className="text-xs text-muted-foreground mt-1">
+          <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 max-w-md w-full animate-in fade-in zoom-in duration-300">
+            <div className="flex items-center gap-3 text-destructive mb-2">
+              <AlertCircle className="w-5 h-5 shrink-0" />
+              <h3 className="font-semibold">Error Loading Model</h3>
+            </div>
+            <p className="text-sm text-destructive/80 mb-1">
+              Model loading failed
+            </p>
+            <div className="bg-destructive/5 rounded border border-destructive/10 p-2 mt-2">
+              <p className="text-xs font-mono text-destructive break-all">
+                {error || text || "Unknown error occurred"}
+              </p>
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-4 leading-relaxed italic">
               Try refreshing the page. If the error persists, your browser may not support WebGPU.
             </p>
           </div>
