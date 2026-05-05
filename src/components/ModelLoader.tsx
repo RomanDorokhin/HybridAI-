@@ -7,13 +7,15 @@ interface ModelLoaderProps {
 }
 
 export function ModelLoader({ progress }: ModelLoaderProps) {
-  const { status, text, progress: percent } = progress;
+  const { status, text, progress: rawPercent } = progress;
 
   if (status === "ready") return null;
 
   const isError = status === "error";
   const isDownloading = status === "downloading";
-  const isLoading = status === "loading";
+  const isLoading = status === "loading" || status === "idle";
+  const percent = Math.min(100, Math.max(0, Math.round(rawPercent || 0)));
+  const statusText = text || (isError ? "Unknown error occurred" : "Initializing model...");
 
   return (
     <div className="flex flex-col items-center justify-center p-8 max-w-md mx-auto">
@@ -29,13 +31,12 @@ export function ModelLoader({ progress }: ModelLoaderProps) {
               {isError
                 ? "Error Loading Model"
                 : isDownloading
-                ? "Downloading Qwen 2.5"
-                : "Loading Qwen 2.5"}
+                  ? "Downloading Qwen 2.5"
+                  : "Loading Qwen 2.5"}
             </h3>
             <p className="text-xs text-muted-foreground">
-              {isDownloading ? "~500 MB download, cached for future use" : "Initializing WebGPU engine"}
+              {isDownloading ? "~500 MB download, cached for future use" : "Initializing local inference engine"}
             </p>
-
           </div>
         </div>
 
@@ -48,7 +49,7 @@ export function ModelLoader({ progress }: ModelLoaderProps) {
                 {percent}%
               </span>
             </div>
-            <p className="text-xs text-muted-foreground truncate">{text}</p>
+            <p className="text-xs text-muted-foreground truncate">{statusText}</p>
           </div>
         )}
 
@@ -63,11 +64,11 @@ export function ModelLoader({ progress }: ModelLoaderProps) {
             </p>
             <div className="bg-destructive/5 rounded border border-destructive/10 p-2 mt-2">
               <p className="text-xs font-mono text-destructive break-all">
-                {error || text || "Unknown error occurred"}
+                {statusText}
               </p>
             </div>
             <p className="text-[10px] text-muted-foreground mt-4 leading-relaxed italic">
-              Try refreshing the page. If the error persists, your browser may not support WebGPU.
+              Try refreshing the page. If the error persists, your browser may not support WebGPU or the ONNX model file may be unavailable.
             </p>
           </div>
         )}

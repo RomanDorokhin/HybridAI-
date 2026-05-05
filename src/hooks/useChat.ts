@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ChatMessage,
+  ChatRole,
   ChatSession,
   ModelProgress,
+  WorkerChatMessage,
+  WorkerRequest,
   WorkerResponse,
 } from "@/types/chat";
 
@@ -17,15 +20,54 @@ const SYSTEM_PROMPT: ChatMessage = {
 };
 
 function generateId() {
-  return Math.random().toString(36).substring(2, 15);
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isChatRole(role: unknown): role is ChatRole {
+  return role === "user" || role === "assistant" || role === "system";
+}
+
+function normalizeSession(input: unknown): ChatSession | null {
+  if (!input || typeof input !== "object") return null;
+
+  const session = input as Partial<ChatSession>;
+  if (typeof session.id !== "string" || !Array.isArray(session.messages)) return null;
+
+  const messages = session.messages
+    .filter((message): message is ChatMessage => {
+      return Boolean(
+        message &&
+          typeof message.id === "string" &&
+          isChatRole(message.role) &&
+          typeof message.content === "string" &&
+          typeof message.timestamp === "number"
+      );
+    })
+    .map((message) => ({ ...message, isStreaming: false }));
+
+  return {
+    id: session.id,
+    title: typeof session.title === "string" && session.title.trim() ? session.title : "New Chat",
+    messages,
+    createdAt: typeof session.createdAt === "number" ? session.createdAt : Date.now(),
+    updatedAt: typeof session.updatedAt === "number" ? session.updatedAt : Date.now(),
+    modelName: typeof session.modelName === "string" ? session.modelName : "Qwen 2.5 0.5B Specialized",
+  };
 }
 
 function loadSessions(): ChatSession[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  return [];
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.map(normalizeSession).filter((session): session is ChatSession => session !== null);
+  } catch (error) {
+    console.warn("Failed to load chat sessions from localStorage", error);
+    return [];
+  }
 }
 
 function saveSessions(sessions: ChatSession[]) {
@@ -44,32 +86,62 @@ function createDefaultSession(): ChatSession {
   };
 }
 
+function createInitialState() {
+  const loadedSessions = loadSessions();
+  const sessions = loadedSessions.length > 0 ? loadedSessions : [createDefaultSession()];
+  const savedActiveId = localStorage.getItem(ACTIVE_SESSION_KEY) || "";
+  const activeSessionId = sessions.some((session) => session.id === savedActiveId)
+    ? savedActiveId
+    : sessions[0].id;
+
+  saveSessions(sessions);
+  localStorage.setItem(ACTIVE_SESSION_KEY, activeSessionId);
+
+  return { sessions, activeSessionId };
+}
+
+function buildWorkerMessages(session: ChatSession): WorkerChatMessage[] {
+  return [SYSTEM_PROMPT, ...session.messages.filter((message) => !message.isStreaming)].map((message) => ({
+    role: message.role,
+    content: message.content,
+  }));
+}
+
+function postWorkerMessage(worker: Worker | null, message: WorkerRequest) {
+  worker?.postMessage(message);
+}
+
 export function useChat() {
+  const [initialState] = useState(createInitialState);
+
   const workerRef = useRef<Worker | null>(null);
-  const [sessions, setSessions] = useState<ChatSession[]>(loadSessions);
-  const [activeSessionId, setActiveSessionId] = useState<string>(() => {
-    return localStorage.getItem(ACTIVE_SESSION_KEY) || "";
-  });
+  const activeSessionIdRef = useRef(initialState.activeSessionId);
+  const [sessions, setSessions] = useState<ChatSession[]>(initialState.sessions);
+  const [activeSessionId, setActiveSessionId] = useState<string>(initialState.activeSessionId);
   const [modelProgress, setModelProgress] = useState<ModelProgress>({
     progress: 0,
-    text: "",
-    status: "idle",
+    text: "Loading model...",
+    status: "loading",
   });
   const [isGenerating, setIsGenerating] = useState(false);
-  const currentSession = sessions.find((s) => s.id === activeSessionId) || createDefaultSession();
 
-  const initWorker = useCallback(() => {
-    if (workerRef.current) return;
+  const currentSession = sessions.find((session) => session.id === activeSessionId) || sessions[0] || createDefaultSession();
 
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
     const worker = new Worker(new URL("../workers/llm.worker.ts", import.meta.url), {
       type: "module",
     });
 
-    worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
-      const { type, payload } = e.data;
+    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      const { type, payload } = event.data;
 
       switch (type) {
-        case "initProgress": {
+        case "initProgress":
+        case "progress": {
           setModelProgress({
             progress: payload.progress,
             text: payload.text,
@@ -86,102 +158,124 @@ export function useChat() {
           break;
         }
         case "chunk": {
-          setSessions((prev) => {
-            const session = prev.find((s) => s.id === activeSessionId);
-            if (!session) return prev;
+          const targetSessionId = payload.sessionId || activeSessionIdRef.current;
+          setSessions((previousSessions) => {
+            const session = previousSessions.find((item) => item.id === targetSessionId);
+            if (!session) return previousSessions;
 
-            const lastMsg = session.messages[session.messages.length - 1];
-            if (lastMsg && lastMsg.role === "assistant" && lastMsg.isStreaming) {
-              const updatedMessages = session.messages.slice(0, -1).concat({
-                ...lastMsg,
+            const lastMessage = session.messages[session.messages.length - 1];
+            if (!lastMessage || lastMessage.role !== "assistant" || !lastMessage.isStreaming) return previousSessions;
+
+            const updatedSession = {
+              ...session,
+              messages: session.messages.slice(0, -1).concat({
+                ...lastMessage,
                 content: payload.fullResponse,
-              });
-              const updatedSession = {
-                ...session,
-                messages: updatedMessages,
-                updatedAt: Date.now(),
-              };
-              const newSessions = prev.map((s) => (s.id === activeSessionId ? updatedSession : s));
-              saveSessions(newSessions);
-              return newSessions;
-            }
-            return prev;
+              }),
+              updatedAt: Date.now(),
+            };
+            const nextSessions = previousSessions.map((item) => (item.id === targetSessionId ? updatedSession : item));
+            saveSessions(nextSessions);
+            return nextSessions;
           });
           break;
         }
         case "done": {
+          const targetSessionId = payload.sessionId || activeSessionIdRef.current;
           setIsGenerating(false);
-          setSessions((prev) => {
-            const session = prev.find((s) => s.id === activeSessionId);
-            if (!session) return prev;
+          setSessions((previousSessions) => {
+            const session = previousSessions.find((item) => item.id === targetSessionId);
+            if (!session) return previousSessions;
 
-            const lastMsg = session.messages[session.messages.length - 1];
-            if (lastMsg && lastMsg.role === "assistant") {
-              const updatedMessages = session.messages.slice(0, -1).concat({
-                ...lastMsg,
+            const lastMessage = session.messages[session.messages.length - 1];
+            if (!lastMessage || lastMessage.role !== "assistant") return previousSessions;
+
+            const finalContent = payload.fullResponse || lastMessage.content;
+            const updatedSession = {
+              ...session,
+              messages: session.messages.slice(0, -1).concat({
+                ...lastMessage,
+                content: finalContent,
                 isStreaming: false,
-              });
-              const updatedSession = {
-                ...session,
-                messages: updatedMessages,
-                updatedAt: Date.now(),
-              };
-              const newSessions = prev.map((s) => (s.id === activeSessionId ? updatedSession : s));
-              saveSessions(newSessions);
-              return newSessions;
-            }
-            return prev;
+              }),
+              updatedAt: Date.now(),
+            };
+            const nextSessions = previousSessions.map((item) => (item.id === targetSessionId ? updatedSession : item));
+            saveSessions(nextSessions);
+            return nextSessions;
           });
           break;
         }
         case "error": {
+          const targetSessionId = payload.sessionId;
           setIsGenerating(false);
-          setModelProgress((prev) => ({
-            ...prev,
-            text: payload.message,
-            status: "error",
-          }));
+          if (!targetSessionId) {
+            setModelProgress((previous) => ({
+              ...previous,
+              text: payload.message,
+              status: "error",
+            }));
+            console.error("Worker error:", payload);
+            break;
+          }
+
+          setSessions((previousSessions) => {
+            const session = previousSessions.find((item) => item.id === targetSessionId);
+            if (!session) return previousSessions;
+
+            const lastMessage = session.messages[session.messages.length - 1];
+            if (!lastMessage || lastMessage.role !== "assistant") return previousSessions;
+
+            const updatedSession = {
+              ...session,
+              messages: session.messages.slice(0, -1).concat({
+                ...lastMessage,
+                content: `Generation failed: ${payload.message}`,
+                isStreaming: false,
+              }),
+              updatedAt: Date.now(),
+            };
+            const nextSessions = previousSessions.map((item) => (item.id === targetSessionId ? updatedSession : item));
+            saveSessions(nextSessions);
+            return nextSessions;
+          });
           console.error("Worker error:", payload);
           break;
         }
       }
     };
 
-    worker.onerror = (err) => {
-      console.error("Worker error:", err);
+    worker.onerror = (error) => {
+      console.error("Worker error:", error);
       setIsGenerating(false);
       setModelProgress({
         progress: 0,
-        text: "Worker error: " + (err.message || "Unknown error"),
+        text: `Worker error: ${error.message || "Unknown error"}`,
         status: "error",
       });
     };
 
     workerRef.current = worker;
-    worker.postMessage({ type: "init" });
-    setModelProgress({ progress: 0, text: "Loading model...", status: "loading" });
-  }, [activeSessionId]);
+    postWorkerMessage(worker, { type: "init" });
 
-  useEffect(() => {
-    initWorker();
     return () => {
-      workerRef.current?.terminate();
-      workerRef.current = null;
+      worker.terminate();
+      if (workerRef.current === worker) workerRef.current = null;
     };
-  }, [initWorker]);
+  }, []);
 
   const sendMessage = useCallback(
     (content: string) => {
-      if (!workerRef.current || isGenerating) return;
+      if (!workerRef.current || isGenerating || modelProgress.status !== "ready") return;
 
-      const userMsg: ChatMessage = {
+      const userMessage: ChatMessage = {
         id: generateId(),
         role: "user",
         content,
         timestamp: Date.now(),
       };
 
-      const assistantMsg: ChatMessage = {
+      const assistantMessage: ChatMessage = {
         id: generateId(),
         role: "assistant",
         content: "",
@@ -189,120 +283,113 @@ export function useChat() {
         isStreaming: true,
       };
 
-      setSessions((prev) => {
-        let session = prev.find((s) => s.id === activeSessionId);
-        let newSessions = prev;
-        let targetId = activeSessionId;
+      setSessions((previousSessions) => {
+        let session = previousSessions.find((item) => item.id === activeSessionId);
+        let nextSessions = previousSessions;
+        let targetSessionId = activeSessionId;
 
         if (!session) {
           session = createDefaultSession();
-          session.id = activeSessionId || session.id;
-          targetId = session.id;
-          if (!activeSessionId) {
-            setActiveSessionId(session.id);
-            localStorage.setItem(ACTIVE_SESSION_KEY, session.id);
-          }
-          newSessions = [session, ...prev];
+          targetSessionId = session.id;
+          nextSessions = [session, ...previousSessions];
+          setActiveSessionId(session.id);
+          activeSessionIdRef.current = session.id;
+          localStorage.setItem(ACTIVE_SESSION_KEY, session.id);
         }
 
         const updatedSession = {
           ...session,
-          messages: [...session.messages, userMsg, assistantMsg],
+          messages: [...session.messages, userMessage, assistantMessage],
           updatedAt: Date.now(),
-          title: session.title === "New Chat" && session.messages.length === 0
-            ? content.slice(0, 40) + (content.length > 40 ? "..." : "")
-            : session.title,
+          title:
+            session.title === "New Chat" && session.messages.length === 0
+              ? content.slice(0, 40) + (content.length > 40 ? "..." : "")
+              : session.title,
         };
 
-        newSessions = newSessions.map((s) => (s.id === targetId ? updatedSession : s));
-        saveSessions(newSessions);
+        nextSessions = nextSessions.map((item) => (item.id === targetSessionId ? updatedSession : item));
+        saveSessions(nextSessions);
 
-        const messagesForWorker = [SYSTEM_PROMPT, ...updatedSession.messages.filter((m) => !m.isStreaming)]
-          .map((m) => ({
-            role: m.role as any,
-            content: m.content,
-          }));
-
-        workerRef.current?.postMessage({
+        postWorkerMessage(workerRef.current, {
           type: "generate",
-          payload: { messages: messagesForWorker },
+          payload: { sessionId: targetSessionId, messages: buildWorkerMessages(updatedSession) },
         });
 
-        return newSessions;
+        return nextSessions;
       });
 
       setIsGenerating(true);
     },
-    [activeSessionId, isGenerating]
+    [activeSessionId, isGenerating, modelProgress.status]
   );
 
   const stopGeneration = useCallback(() => {
-    workerRef.current?.postMessage({ type: "stop" });
+    postWorkerMessage(workerRef.current, { type: "stop" });
     setIsGenerating(false);
   }, []);
 
   const createNewChat = useCallback(() => {
     const session = createDefaultSession();
-    setSessions((prev) => {
-      const exists = prev.find((s) => s.id === session.id);
-      if (exists) return prev;
-      const newSessions = [session, ...prev];
-      saveSessions(newSessions);
-      return newSessions;
+    setSessions((previousSessions) => {
+      const nextSessions = [session, ...previousSessions];
+      saveSessions(nextSessions);
+      return nextSessions;
     });
     setActiveSessionId(session.id);
+    activeSessionIdRef.current = session.id;
     localStorage.setItem(ACTIVE_SESSION_KEY, session.id);
   }, []);
 
   const switchSession = useCallback((id: string) => {
     setActiveSessionId(id);
+    activeSessionIdRef.current = id;
     localStorage.setItem(ACTIVE_SESSION_KEY, id);
   }, []);
 
   const deleteSession = useCallback(
     (id: string) => {
-      setSessions((prev) => {
-        const newSessions = prev.filter((s) => s.id !== id);
-        saveSessions(newSessions);
-        if (activeSessionId === id) {
-          const next = newSessions[0]?.id || "";
-          setActiveSessionId(next);
-          localStorage.setItem(ACTIVE_SESSION_KEY, next);
-        }
-        return newSessions;
+      setSessions((previousSessions) => {
+        const filteredSessions = previousSessions.filter((session) => session.id !== id);
+        const nextSessions = filteredSessions.length > 0 ? filteredSessions : [createDefaultSession()];
+        const nextActiveId = activeSessionId === id ? nextSessions[0].id : activeSessionId;
+
+        saveSessions(nextSessions);
+        setActiveSessionId(nextActiveId);
+        activeSessionIdRef.current = nextActiveId;
+        localStorage.setItem(ACTIVE_SESSION_KEY, nextActiveId);
+        return nextSessions;
       });
     },
     [activeSessionId]
   );
 
   const clearAllSessions = useCallback(() => {
-    setSessions([]);
-    saveSessions([]);
     const session = createDefaultSession();
-    setActiveSessionId(session.id);
-    localStorage.setItem(ACTIVE_SESSION_KEY, session.id);
     setSessions([session]);
     saveSessions([session]);
+    setActiveSessionId(session.id);
+    activeSessionIdRef.current = session.id;
+    localStorage.setItem(ACTIVE_SESSION_KEY, session.id);
   }, []);
 
   const retryLastMessage = useCallback(() => {
-    const session = sessions.find((s) => s.id === activeSessionId);
-    if (!session || !workerRef.current || isGenerating) return;
+    const session = sessions.find((item) => item.id === activeSessionId);
+    if (!session || !workerRef.current || isGenerating || modelProgress.status !== "ready") return;
 
-    const userMessages = session.messages.filter((m) => m.role === "user");
-    const lastUserMessage = userMessages[userMessages.length - 1];
-    if (!lastUserMessage) return;
+    setSessions((previousSessions) => {
+      const targetSession = previousSessions.find((item) => item.id === activeSessionId);
+      if (!targetSession) return previousSessions;
 
-    setSessions((prev) => {
-      const s = prev.find((p) => p.id === activeSessionId);
-      if (!s) return prev;
+      const lastAssistantIndex = [...targetSession.messages]
+        .reverse()
+        .findIndex((message) => message.role === "assistant");
+      if (lastAssistantIndex < 0) return previousSessions;
 
-      const withoutLastAssistant = s.messages.filter(
-        (m, idx, arr) =>
-          !(m.role === "assistant" && idx === arr.length - 1 && arr[idx - 1]?.role === "user")
-      );
+      const removeIndex = targetSession.messages.length - 1 - lastAssistantIndex;
+      const previousMessage = targetSession.messages[removeIndex - 1];
+      if (!previousMessage || previousMessage.role !== "user") return previousSessions;
 
-      const assistantMsg: ChatMessage = {
+      const assistantMessage: ChatMessage = {
         id: generateId(),
         role: "assistant",
         content: "",
@@ -310,29 +397,25 @@ export function useChat() {
         isStreaming: true,
       };
 
-      const updated = {
-        ...s,
-        messages: [...withoutLastAssistant, assistantMsg],
+      const updatedSession = {
+        ...targetSession,
+        messages: targetSession.messages.slice(0, removeIndex).concat(assistantMessage),
         updatedAt: Date.now(),
       };
 
-      const newSessions = prev.map((p) => (p.id === activeSessionId ? updated : p));
-      saveSessions(newSessions);
+      const nextSessions = previousSessions.map((item) => (item.id === activeSessionId ? updatedSession : item));
+      saveSessions(nextSessions);
 
-      const messagesForWorker = [SYSTEM_PROMPT, ...updated.messages]
-        .filter((m) => m.role !== "system" || m.id === "system")
-        .map((m) => ({ role: m.role, content: m.content }));
-
-      workerRef.current?.postMessage({
+      postWorkerMessage(workerRef.current, {
         type: "generate",
-        payload: { messages: messagesForWorker },
+        payload: { sessionId: activeSessionId, messages: buildWorkerMessages(updatedSession) },
       });
 
-      return newSessions;
+      return nextSessions;
     });
 
     setIsGenerating(true);
-  }, [activeSessionId, sessions, isGenerating]);
+  }, [activeSessionId, sessions, isGenerating, modelProgress.status]);
 
   return {
     sessions,
