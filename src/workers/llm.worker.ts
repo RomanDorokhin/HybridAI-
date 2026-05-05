@@ -3,8 +3,8 @@ import { pipeline, env } from "@huggingface/transformers";
 
 // Настройки для работы в браузере
 env.allowLocalModels = true;
-env.allowRemoteModels = false; // Отключаем удаленные модели, используем только свои
-env.localModelPath = "/HybridAI-/"; // Корень проекта на GitHub Pages
+env.allowRemoteModels = false;
+env.localModelPath = "/HybridAI-/";
 
 let generator: any = null;
 let isGenerating = false;
@@ -25,12 +25,11 @@ self.onmessage = async (e: MessageEvent) => {
           payload: { text: "Loading local ONNX model...", progress: 0 },
         });
 
-        // Путь относительно корня домена с учетом base проекта
         const modelPath = "models/qwen-onnx"; 
 
+        // Пробуем WebGPU
         generator = await pipeline("text-generation", modelPath, {
-            device: 'webgpu', 
-            dtype: 'fp32',
+            device: 'webgpu',
         });
 
         self.postMessage({
@@ -38,11 +37,12 @@ self.onmessage = async (e: MessageEvent) => {
           payload: { modelId: "Qwen-2.5-0.5B-ONNX" },
         });
       } catch (error: any) {
-        console.error("WebGPU failed, falling back to CPU", error);
+        console.error("WebGPU failed, falling back to WASM", error);
         try {
             const modelPath = "models/qwen-onnx";
+            // Исправлено: используем 'wasm' вместо 'cpu'
             generator = await pipeline("text-generation", modelPath, {
-                device: 'cpu',
+                device: 'wasm',
             });
             self.postMessage({ type: "ready", payload: { modelId: "Qwen-2.5-0.5B-ONNX" } });
         } catch (innerError: any) {
