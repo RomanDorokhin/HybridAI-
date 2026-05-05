@@ -2,9 +2,8 @@
 import { pipeline, env } from "@huggingface/transformers";
 
 // Настройки для работы в браузере
-env.allowLocalModels = true;
+env.allowLocalModels = false; // Отключаем поиск локально
 env.allowRemoteModels = true;
-env.localModelPath = "/"; // Ищем модели от корня сайта
 
 let generator: any = null;
 let isGenerating = false;
@@ -22,13 +21,15 @@ self.onmessage = async (e: MessageEvent) => {
 
         self.postMessage({
           type: "initProgress",
-          payload: { text: "Loading optimized ONNX model...", progress: 0 },
+          payload: { text: "Loading optimized ONNX model from GitHub LFS...", progress: 0 },
         });
 
-        // Загружаем нашу ONNX модель из папки public/models/qwen-onnx
-        generator = await pipeline("text-generation", "models/qwen-onnx", {
-            device: 'webgpu', // Пробуем WebGPU
-            dtype: 'fp32',    // Для квантованной модели указываем базу
+        // Прямая ссылка на папку с ONNX моделью в твоем репозитории
+        const modelPath = "https://media.githubusercontent.com/media/RomanDorokhin/HybridAI-/main/models/onnx/";
+
+        generator = await pipeline("text-generation", modelPath, {
+            device: 'webgpu', 
+            dtype: 'fp32',
         });
 
         self.postMessage({
@@ -38,7 +39,8 @@ self.onmessage = async (e: MessageEvent) => {
       } catch (error: any) {
         console.error("WebGPU failed, falling back to CPU", error);
         try {
-            generator = await pipeline("text-generation", "models/qwen-onnx", {
+            const modelPath = "https://media.githubusercontent.com/media/RomanDorokhin/HybridAI-/main/models/onnx/";
+            generator = await pipeline("text-generation", modelPath, {
                 device: 'cpu',
             });
             self.postMessage({ type: "ready", payload: { modelId: "Qwen-2.5-0.5B-ONNX" } });
@@ -59,7 +61,6 @@ self.onmessage = async (e: MessageEvent) => {
       try {
         const { messages } = payload;
         
-        // Формируем промпт в формате Qwen
         let prompt = "";
         for (const msg of messages) {
             prompt += `<|im_start|>${msg.role}\n${msg.content}<|im_end|>\n`;
