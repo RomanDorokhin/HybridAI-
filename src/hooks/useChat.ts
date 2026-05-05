@@ -149,9 +149,10 @@ export function useChat() {
 
     worker.onerror = (err) => {
       console.error("Worker error:", err);
+      setIsGenerating(false);
       setModelProgress({
         progress: 0,
-        text: "Worker error: " + err.message,
+        text: "Worker error: " + (err.message || "Unknown error"),
         status: "error",
       });
     };
@@ -216,10 +217,9 @@ export function useChat() {
         newSessions = newSessions.map((s) => (s.id === targetId ? updatedSession : s));
         saveSessions(newSessions);
 
-        const messagesForWorker = [SYSTEM_PROMPT, ...updatedSession.messages]
-          .filter((m) => m.role !== "system" || m.id === "system")
+        const messagesForWorker = [SYSTEM_PROMPT, ...updatedSession.messages.filter((m) => !m.isStreaming)]
           .map((m) => ({
-            role: m.role,
+            role: m.role as any,
             content: m.content,
           }));
 

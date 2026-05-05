@@ -3,7 +3,7 @@ import { CreateMLCEngine, MLCEngine } from "@mlc-ai/web-llm";
 import type { ChatCompletionMessageParam } from "@mlc-ai/web-llm";
 
 const MODEL_ID = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
-// Alternative smaller model: "Llama-3.2-1B-Instruct-q4f16_1-MLC"
+// Alternative smaller model: "Llama-3.2-3B-Instruct-q4f16_1-MLC"
 
 let engine: MLCEngine | null = null;
 let isGenerating = false;
@@ -69,7 +69,7 @@ self.onmessage = async (e: MessageEvent) => {
           stream: true,
           messages,
           temperature: 0.7,
-          max_tokens: 2048,
+          max_tokens: 512,
         });
 
         let fullResponse = "";
@@ -110,6 +110,7 @@ self.onmessage = async (e: MessageEvent) => {
     case "stop": {
       shouldStop = true;
       isGenerating = false;
+      self.postMessage({ type: "done", payload: { fullResponse: "", aborted: true } });
       break;
     }
 
