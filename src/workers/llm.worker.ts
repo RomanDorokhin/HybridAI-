@@ -2,8 +2,9 @@
 import { pipeline, env } from "@huggingface/transformers";
 
 // Настройки для работы в браузере
-env.allowLocalModels = false; // Отключаем поиск локально
-env.allowRemoteModels = true;
+env.allowLocalModels = true;
+env.allowRemoteModels = false; // Отключаем удаленные модели, используем только свои
+env.localModelPath = "/HybridAI-/"; // Корень проекта на GitHub Pages
 
 let generator: any = null;
 let isGenerating = false;
@@ -21,11 +22,11 @@ self.onmessage = async (e: MessageEvent) => {
 
         self.postMessage({
           type: "initProgress",
-          payload: { text: "Loading optimized ONNX model from GitHub LFS...", progress: 0 },
+          payload: { text: "Loading local ONNX model...", progress: 0 },
         });
 
-        // Прямая ссылка на папку с ONNX моделью в твоем репозитории
-        const modelPath = "https://media.githubusercontent.com/media/RomanDorokhin/HybridAI-/main/models/onnx/";
+        // Путь относительно корня домена с учетом base проекта
+        const modelPath = "models/qwen-onnx"; 
 
         generator = await pipeline("text-generation", modelPath, {
             device: 'webgpu', 
@@ -39,7 +40,7 @@ self.onmessage = async (e: MessageEvent) => {
       } catch (error: any) {
         console.error("WebGPU failed, falling back to CPU", error);
         try {
-            const modelPath = "https://media.githubusercontent.com/media/RomanDorokhin/HybridAI-/main/models/onnx/";
+            const modelPath = "models/qwen-onnx";
             generator = await pipeline("text-generation", modelPath, {
                 device: 'cpu',
             });
