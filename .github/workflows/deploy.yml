@@ -25,7 +25,12 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
+
+      - name: Verify LFS files
+        run: |
+          git lfs pull
+          ls -lh public/models/qwen-onnx/
 
       - name: Build
         run: npm run build
