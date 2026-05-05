@@ -24,10 +24,11 @@ self.onmessage = async (e: MessageEvent) => {
           payload: { text: "Loading specialized Qwen model...", progress: 0 },
         });
 
-        // Загружаем нашу модель из папки public
-        generator = await pipeline("text-generation", "/model.gguf", {
+        // Загружаем нашу модель из хранилища GitHub LFS
+        generator = await pipeline("text-generation", "https://media.githubusercontent.com/media/RomanDorokhin/HybridAI-/main/models/model.gguf", {
             device: 'webgpu', // Пробуем WebGPU для скорости
         });
+
 
 
         self.postMessage({
@@ -37,9 +38,10 @@ self.onmessage = async (e: MessageEvent) => {
       } catch (error: any) {
         // Если WebGPU не взлетел, пробуем CPU
         try {
-            generator = await pipeline("text-generation", "/model.gguf", {
+            generator = await pipeline("text-generation", "https://media.githubusercontent.com/media/RomanDorokhin/HybridAI-/main/models/model.gguf", {
                 device: 'cpu',
             });
+
 
             self.postMessage({ type: "ready", payload: { modelId: "Qwen-2.5-0.5B-OpenSmolGame" } });
         } catch (innerError: any) {
