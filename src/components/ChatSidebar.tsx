@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   ExternalLink,
   ShieldCheck,
+  RotateCcw,
 } from "lucide-react";
 import type { ChatSession } from "@/types/chat";
 import type { APIProvider } from "@/lib/llm-api";
@@ -30,6 +31,11 @@ interface ChatSidebarProps {
     model: string;
   };
   onUpdateSettings: (settings: any) => void;
+  onFactoryReset: () => void;
+  usage: {
+    requests: number;
+    lastReset: number;
+  };
 }
 
 export function ChatSidebar({
@@ -43,6 +49,8 @@ export function ChatSidebar({
   onClose,
   settings,
   onUpdateSettings,
+  onFactoryReset,
+  usage,
 }: ChatSidebarProps) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -79,8 +87,8 @@ export function ChatSidebar({
               <ShieldCheck className="w-5 h-5 text-primary-foreground" />
             </div>
             <div>
-              <h2 className="font-bold text-sm text-sidebar-foreground leading-none">HybridAI 2.0</h2>
-              <p className="text-[10px] text-sidebar-foreground/50 mt-1 uppercase tracking-wider font-semibold">API First</p>
+              <h2 className="font-bold text-sm text-sidebar-foreground leading-none">Smol-agent</h2>
+              <p className="text-[10px] text-sidebar-foreground/50 mt-1 uppercase tracking-wider font-semibold italic">API First</p>
             </div>
           </div>
           <Button
@@ -157,6 +165,32 @@ export function ChatSidebar({
                   onChange={(e) => onUpdateSettings({ model: e.target.value })}
                   className="bg-background"
                 />
+              </div>
+
+              <div className="pt-4 border-t border-sidebar-border mt-4">
+                <div className="flex items-center justify-between px-1 mb-2">
+                  <span className="text-[10px] font-bold uppercase text-sidebar-foreground/40 tracking-wider">Usage Stats</span>
+                  <span className="text-[10px] font-mono text-primary/60">{usage.requests}/50</span>
+                </div>
+                <div className="w-full h-1 bg-sidebar-accent rounded-full overflow-hidden mb-4">
+                  <div 
+                    className="h-full bg-primary transition-all duration-500" 
+                    style={{ width: `${(usage.requests / 50) * 100}%` }}
+                  />
+                </div>
+                
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onFactoryReset}
+                  className="w-full justify-start gap-2 text-[11px] text-destructive hover:text-destructive hover:bg-destructive/10 h-8"
+                >
+                  <RotateCcw size={14} />
+                  Reset App Cache (Hard)
+                </Button>
+                <p className="text-[9px] text-sidebar-foreground/30 mt-2 px-1 leading-tight">
+                  This will delete ALL chats, history and API keys permanently.
+                </p>
               </div>
             </div>
           ) : (
