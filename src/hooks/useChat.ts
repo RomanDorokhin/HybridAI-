@@ -11,21 +11,38 @@ import { generateStream } from "@/lib/llm-api";
 const STORAGE_KEY = "hybrid-chat-sessions-v2";
 const ACTIVE_SESSION_KEY = "hybrid-chat-active-session-v2";
 const SETTINGS_KEY = "hybrid-chat-settings";
+const USAGE_KEY = "hybrid-chat-usage";
 
-const SYSTEM_PROMPT_CONTENT = `Ты — Senior Game Architect и Protocol Designer. Твоя задача — помочь создать 2D игру. 
+export interface UsageStats {
+  requests: number;
+  lastReset: number;
+}
+
+const DEFAULT_USAGE: UsageStats = {
+  requests: 0,
+  lastReset: Date.now(),
+};
+
+const SYSTEM_PROMPT_CONTENT = `Ты — Senior Game Architect и Protocol Designer. Твоя задача — помочь спроектировать 2D игру. 
 Отвечай ВСЕГДА на русском языке.
 
-ПРАВИЛО №1: На приветствия (Привет, Хай, Здорово и т.д.) отвечай МАКСИМАЛЬНО КРАТКО (одно предложение) и спрашивай, какую игру пользователь хочет создать. НЕ выдавай никакой структуры, пока не услышишь идею игры.
+ПРАВИЛО №1: На приветствия отвечай МАКСИМАЛЬНО КРАТКО (одно предложение) и спрашивай, какую игру пользователь хочет создать. НЕ выдавай никакой структуры, пока не услышишь идею игры.
 
-ПРАВИЛО №2: Только когда пользователь опишет идею, структурируй ответ на 4 части:
-1. КОНЦЕПТ: Мир, герой, враги.
-2. АРХИТЕКТУРА: Механики и данные.
-3. ПРОТОКОЛ: Синхронизация и события.
-4. КОД: Паттерны и примеры.
+ПРАВИЛО №2: Только когда пользователь опишет идею, структурируй ответ на 3 части:
+1. КОНЦЕПТ: Мир, герой, враги, основная идея.
+2. АРХИТЕКТУРА: Описание механик, стейт игры, логика данных.
+3. ПРОТОКОЛ: Как события передаются между компонентами.
 
-Будь технически точным, но не спамь структурой без запроса.`;
+КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО:
+- Писать полный код игры для Unity или большие блоки C#-кода.
+- Спамить техническими деталями без запроса.
 
-// Removed unused SYSTEM_PROMPT
+ИСКЛЮЧЕНИЕ:
+- Если пользователь хочет "протестировать", "поиграть" или "увидеть пример прямо здесь", ты МОЖЕШЬ сгенерировать ОДИН компактный блок кода \`\`\`html\`\`\` (HTML + JS Canvas). Этот код будет запущен прямо в чате как интерактивный прототип.
+
+Твоя роль — Дизайнер и Архитектор. Ты проектируешь игру, а для быстрой проверки гипотез используешь веб-прототипы.`;
+
+export type GenerationStep = 'none' | 'analyzing' | 'designing' | 'generating' | 'finalizing';
 
 interface ChatSettings {
   provider: APIProvider;
@@ -71,7 +88,7 @@ function normalizeSession(input: unknown): ChatSession | null {
     messages,
     createdAt: typeof session.createdAt === "number" ? session.createdAt : Date.now(),
     updatedAt: typeof session.updatedAt === "number" ? session.updatedAt : Date.now(),
-    modelName: typeof session.modelName === "string" ? session.modelName : "HybridAI 2.0",
+    modelName: typeof session.modelName === "string" ? session.modelName : "Smol-agent",
   };
 }
 
@@ -102,8 +119,24 @@ function createDefaultSession(): ChatSession {
     messages: [],
     createdAt: now,
     updatedAt: now,
-    modelName: "HybridAI 2.0",
+    modelName: "Smol-agent",
   };
+}
+
+function loadUsage(): UsageStats {
+  try {
+    const raw = localStorage.getItem(USAGE_KEY);
+    if (!raw) return DEFAULT_USAGE;
+    const usage = JSON.parse(raw);
+    
+    // Reset if 24h passed
+    if (Date.now() - usage.lastReset > 24 * 60 * 60 * 1000) {
+      return DEFAULT_USAGE;
+    }
+    return usage;
+  } catch {
+    return DEFAULT_USAGE;
+  }
 }
 
 function loadSettings(): ChatSettings {
@@ -120,7 +153,9 @@ export function useChat() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [settings, setSettings] = useState<ChatSettings>(loadSettings);
+  const [usage, setUsage] = useState<UsageStats>(loadUsage);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationStep, setGenerationStep] = useState<GenerationStep>('none');
   const [modelProgress] = useState<ModelProgress>({
     progress: 100,
     text: "API Ready",
@@ -161,6 +196,11 @@ export function useChat() {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   }, [settings]);
 
+  // Save usage
+  useEffect(() => {
+    localStorage.setItem(USAGE_KEY, JSON.stringify(usage));
+  }, [usage]);
+
   const currentSession = sessions.find((s) => s.id === activeSessionId) || sessions[0] || createDefaultSession();
 
   const updateSettings = useCallback((newSettings: Partial<ChatSettings>) => {
@@ -170,6 +210,10 @@ export function useChat() {
   const sendMessage = useCallback(
     async (content: string) => {
       if (isGenerating) return;
+      if (usage.requests >= 50) {
+        alert("Daily limit reached (50/50). Try again in 24 hours.");
+        return;
+      }
 
       const userMessage: ChatMessage = {
         id: generateId(),
@@ -216,6 +260,8 @@ export function useChat() {
       });
 
       setIsGenerating(true);
+      setGenerationStep('analyzing');
+      setUsage(prev => ({ ...prev, requests: prev.requests + 1 }));
       abortControllerRef.current = new AbortController();
 
       try {
@@ -237,7 +283,13 @@ export function useChat() {
         );
 
         let fullContent = "";
+        let stepUpdated = false;
+
         for await (const chunk of stream) {
+          if (!stepUpdated) {
+            setGenerationStep('designing');
+            stepUpdated = true;
+          }
           fullContent += chunk;
           setSessions((prev) =>
             prev.map((s) =>
@@ -299,6 +351,7 @@ export function useChat() {
         }
       } finally {
         setIsGenerating(false);
+        setGenerationStep('none');
         abortControllerRef.current = null;
       }
     },
@@ -337,6 +390,16 @@ export function useChat() {
     setActiveSessionId(session.id);
   }, []);
 
+  const factoryReset = useCallback(() => {
+    if (confirm("Вы уверены, что хотите полностью сбросить кэш? Это удалит все чаты и настройки API.")) {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(ACTIVE_SESSION_KEY);
+      localStorage.removeItem(SETTINGS_KEY);
+      localStorage.removeItem(USAGE_KEY);
+      window.location.reload();
+    }
+  }, []);
+
   const retryLastMessage = useCallback(() => {
     const session = sessions.find((s) => s.id === activeSessionId);
     if (!session || isGenerating) return;
@@ -373,7 +436,10 @@ export function useChat() {
     switchSession,
     deleteSession,
     clearAllSessions,
+    factoryReset,
     retryLastMessage,
+    usage,
+    generationStep,
     initModel: () => {}, // No-op in 2.0
   };
 }
