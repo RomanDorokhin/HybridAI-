@@ -5,21 +5,11 @@ import { inspectAttr } from 'kimi-plugin-inspect-react'
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: '/',
+  base: './',
   plugins: [inspectAttr(), react()],
-  server: {
-    port: 3000,
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
-  },
-  worker: {
-    format: 'es',
   },
 });
