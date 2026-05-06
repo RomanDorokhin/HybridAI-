@@ -4,30 +4,41 @@ import type {
   ChatRole,
   ChatSession,
   ModelProgress,
-  WorkerChatMessage,
-  WorkerRequest,
-  WorkerResponse,
 } from "@/types/chat";
+import { generateStream, APIProvider, LLMConfig } from "@/lib/llm-api";
 
-const STORAGE_KEY = "llama-chat-sessions";
-const ACTIVE_SESSION_KEY = "llama-chat-active-session";
+const STORAGE_KEY = "hybrid-chat-sessions-v2";
+const ACTIVE_SESSION_KEY = "hybrid-chat-active-session-v2";
+const SETTINGS_KEY = "hybrid-chat-settings";
+
+const SYSTEM_PROMPT_CONTENT = `Ты — Senior Game Architect и Protocol Designer. Твоя задача — помочь создать 2D игру с глубокой архитектурной проработкой.
+Отвечай ВСЕГДА на русском языке.
+
+Твой ответ должен быть структурирован на 4 части:
+1. КОНЦЕПТ: Краткое описание мира, героя и врагов.
+2. АРХИТЕКТУРА: Основные механики игры и структуры данных.
+3. ПРОТОКОЛ: Логика синхронизации состояний или игровых событий (JSON/Binary).
+4. КОД: Примеры реализации или паттерны на TypeScript/Javascript.
+
+Будь кратким, но технически точным. Помогай с архитектурой протокола так, чтобы игру можно было легко расширять.`;
+
 const SYSTEM_PROMPT: ChatMessage = {
   id: "system",
   role: "system",
-  content: `You are OpenGame, a specialized game design agent. Your goal is to help the user create a 2D game by following the OpenSmolGame protocol.
-
-When the user describes their game idea, you MUST eventually provide a final GAME PROMPT in the following structured format:
-
-WORLD: [Environment description, e.g., "Neon cyberpunk city with rain and fog"]
-PLAYER: [Hero description and mechanics, e.g., "Cyber-ninja with katana and dash ability"]
-ENEMIES: [Enemy types and behavior, e.g., "Robot drones that fire lasers from a distance"]
-
-GUIDELINES:
-1. First, ask 2-3 clarifying questions to understand the genre, player abilities, and world setting.
-2. Once the idea is clear, output the structured WORLD/PLAYER/ENEMIES prompt.
-3. Be concise and creative. Use technical but descriptive language.
-4. If the user says "давай напишем игру" or similar, start the interviewing process immediately.`,
+  content: SYSTEM_PROMPT_CONTENT,
   timestamp: Date.now(),
+};
+
+interface ChatSettings {
+  provider: APIProvider;
+  apiKey: string;
+  model: string;
+}
+
+const DEFAULT_SETTINGS: ChatSettings = {
+  provider: "openrouter",
+  apiKey: "",
+  model: "deepseek/deepseek-chat",
 };
 
 function generateId() {
@@ -62,7 +73,7 @@ function normalizeSession(input: unknown): ChatSession | null {
     messages,
     createdAt: typeof session.createdAt === "number" ? session.createdAt : Date.now(),
     updatedAt: typeof session.updatedAt === "number" ? session.updatedAt : Date.now(),
-    modelName: typeof session.modelName === "string" ? session.modelName : "Qwen 2.5 0.5B Specialized",
+    modelName: typeof session.modelName === "string" ? session.modelName : "HybridAI 2.0",
   };
 }
 
@@ -93,191 +104,74 @@ function createDefaultSession(): ChatSession {
     messages: [],
     createdAt: now,
     updatedAt: now,
-    modelName: "Qwen 2.5 0.5B Specialized",
+    modelName: "HybridAI 2.0",
   };
 }
 
-function createInitialState() {
-  const loadedSessions = loadSessions();
-  const sessions = loadedSessions.length > 0 ? loadedSessions : [createDefaultSession()];
-  const savedActiveId = localStorage.getItem(ACTIVE_SESSION_KEY) || "";
-  const activeSessionId = sessions.some((session) => session.id === savedActiveId)
-    ? savedActiveId
-    : sessions[0].id;
-
-  saveSessions(sessions);
-  localStorage.setItem(ACTIVE_SESSION_KEY, activeSessionId);
-
-  return { sessions, activeSessionId };
-}
-
-function buildWorkerMessages(session: ChatSession): WorkerChatMessage[] {
-  return [SYSTEM_PROMPT, ...session.messages.filter((message) => !message.isStreaming)].map((message) => ({
-    role: message.role,
-    content: message.content,
-  }));
-}
-
-function postWorkerMessage(worker: Worker | null, message: WorkerRequest) {
-  worker?.postMessage(message);
+function loadSettings(): ChatSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return DEFAULT_SETTINGS;
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
 }
 
 export function useChat() {
-  const [initialState] = useState(createInitialState);
-
-  const workerRef = useRef<Worker | null>(null);
-  const activeSessionIdRef = useRef(initialState.activeSessionId);
-  const [sessions, setSessions] = useState<ChatSession[]>(initialState.sessions);
-  const [activeSessionId, setActiveSessionId] = useState<string>(initialState.activeSessionId);
-  const [modelProgress, setModelProgress] = useState<ModelProgress>({
-    progress: 0,
-    text: "Loading model...",
-    status: "loading",
-  });
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string>("");
+  const [settings, setSettings] = useState<ChatSettings>(loadSettings);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [modelProgress, setModelProgress] = useState<ModelProgress>({
+    progress: 100,
+    text: "API Ready",
+    status: "ready",
+  });
 
-  const currentSession = sessions.find((session) => session.id === activeSessionId) || sessions[0] || createDefaultSession();
+  const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Initialize
   useEffect(() => {
-    activeSessionIdRef.current = activeSessionId;
+    const loadedSessions = loadSessions();
+    const initialSessions = loadedSessions.length > 0 ? loadedSessions : [createDefaultSession()];
+    const savedActiveId = localStorage.getItem(ACTIVE_SESSION_KEY) || "";
+    const initialActiveId = initialSessions.some((s) => s.id === savedActiveId)
+      ? savedActiveId
+      : initialSessions[0].id;
+
+    setSessions(initialSessions);
+    setActiveSessionId(initialActiveId);
+  }, []);
+
+  // Save sessions on change
+  useEffect(() => {
+    if (sessions.length > 0) {
+      saveSessions(sessions);
+    }
+  }, [sessions]);
+
+  // Save active session ID
+  useEffect(() => {
+    if (activeSessionId) {
+      localStorage.setItem(ACTIVE_SESSION_KEY, activeSessionId);
+    }
   }, [activeSessionId]);
 
+  // Save settings
   useEffect(() => {
-    const worker = new Worker(new URL("../workers/llm.worker.ts", import.meta.url), {
-      type: "module",
-    });
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }, [settings]);
 
-    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
-      const { type, payload } = event.data;
+  const currentSession = sessions.find((s) => s.id === activeSessionId) || sessions[0] || createDefaultSession();
 
-      switch (type) {
-        case "initProgress":
-        case "progress": {
-          setModelProgress({
-            progress: payload.progress,
-            text: payload.text,
-            status: payload.progress >= 100 ? "ready" : "downloading",
-          });
-          break;
-        }
-        case "ready": {
-          setModelProgress({
-            progress: 100,
-            text: "Model ready",
-            status: "ready",
-          });
-          break;
-        }
-        case "chunk": {
-          const targetSessionId = payload.sessionId || activeSessionIdRef.current;
-          setSessions((previousSessions) => {
-            const session = previousSessions.find((item) => item.id === targetSessionId);
-            if (!session) return previousSessions;
-
-            const lastMessage = session.messages[session.messages.length - 1];
-            if (!lastMessage || lastMessage.role !== "assistant" || !lastMessage.isStreaming) return previousSessions;
-
-            const updatedSession = {
-              ...session,
-              messages: session.messages.slice(0, -1).concat({
-                ...lastMessage,
-                content: payload.fullResponse,
-              }),
-              updatedAt: Date.now(),
-            };
-            const nextSessions = previousSessions.map((item) => (item.id === targetSessionId ? updatedSession : item));
-            saveSessions(nextSessions);
-            return nextSessions;
-          });
-          break;
-        }
-        case "done": {
-          const targetSessionId = payload.sessionId || activeSessionIdRef.current;
-          setIsGenerating(false);
-          setSessions((previousSessions) => {
-            const session = previousSessions.find((item) => item.id === targetSessionId);
-            if (!session) return previousSessions;
-
-            const lastMessage = session.messages[session.messages.length - 1];
-            if (!lastMessage || lastMessage.role !== "assistant") return previousSessions;
-
-            const finalContent = payload.fullResponse || lastMessage.content;
-            const updatedSession = {
-              ...session,
-              messages: session.messages.slice(0, -1).concat({
-                ...lastMessage,
-                content: finalContent,
-                isStreaming: false,
-              }),
-              updatedAt: Date.now(),
-            };
-            const nextSessions = previousSessions.map((item) => (item.id === targetSessionId ? updatedSession : item));
-            saveSessions(nextSessions);
-            return nextSessions;
-          });
-          break;
-        }
-        case "error": {
-          const targetSessionId = payload.sessionId;
-          setIsGenerating(false);
-          if (!targetSessionId) {
-            setModelProgress((previous) => ({
-              ...previous,
-              text: payload.message,
-              status: "error",
-            }));
-            console.error("Worker error:", payload);
-            break;
-          }
-
-          setSessions((previousSessions) => {
-            const session = previousSessions.find((item) => item.id === targetSessionId);
-            if (!session) return previousSessions;
-
-            const lastMessage = session.messages[session.messages.length - 1];
-            if (!lastMessage || lastMessage.role !== "assistant") return previousSessions;
-
-            const updatedSession = {
-              ...session,
-              messages: session.messages.slice(0, -1).concat({
-                ...lastMessage,
-                content: `Generation failed: ${payload.message}`,
-                isStreaming: false,
-              }),
-              updatedAt: Date.now(),
-            };
-            const nextSessions = previousSessions.map((item) => (item.id === targetSessionId ? updatedSession : item));
-            saveSessions(nextSessions);
-            return nextSessions;
-          });
-          console.error("Worker error:", payload);
-          break;
-        }
-      }
-    };
-
-    worker.onerror = (error) => {
-      console.error("Worker error:", error);
-      setIsGenerating(false);
-      setModelProgress({
-        progress: 0,
-        text: `Worker error: ${error.message || "Unknown error"}`,
-        status: "error",
-      });
-    };
-
-    workerRef.current = worker;
-    postWorkerMessage(worker, { type: "init" });
-
-    return () => {
-      worker.terminate();
-      if (workerRef.current === worker) workerRef.current = null;
-    };
+  const updateSettings = useCallback((newSettings: Partial<ChatSettings>) => {
+    setSettings((prev) => ({ ...prev, ...newSettings }));
   }, []);
 
   const sendMessage = useCallback(
-    (content: string) => {
-      if (!workerRef.current || isGenerating || modelProgress.status !== "ready") return;
+    async (content: string) => {
+      if (isGenerating) return;
 
       const userMessage: ChatMessage = {
         id: generateId(),
@@ -294,139 +188,162 @@ export function useChat() {
         isStreaming: true,
       };
 
-      setSessions((previousSessions) => {
-        let session = previousSessions.find((item) => item.id === activeSessionId);
-        let nextSessions = previousSessions;
-        let targetSessionId = activeSessionId;
-
+      let targetSessionId = activeSessionId;
+      
+      setSessions((prev) => {
+        let session = prev.find((s) => s.id === activeSessionId);
         if (!session) {
           session = createDefaultSession();
           targetSessionId = session.id;
-          nextSessions = [session, ...previousSessions];
           setActiveSessionId(session.id);
-          activeSessionIdRef.current = session.id;
-          localStorage.setItem(ACTIVE_SESSION_KEY, session.id);
+          const newSessions = [session, ...prev];
+          return newSessions.map(s => s.id === targetSessionId ? {
+            ...s,
+            messages: [...s.messages, userMessage, assistantMessage],
+            title: content.slice(0, 40) + (content.length > 40 ? "..." : ""),
+            updatedAt: Date.now()
+          } : s);
         }
 
-        const updatedSession = {
-          ...session,
-          messages: [...session.messages, userMessage, assistantMessage],
-          updatedAt: Date.now(),
-          title:
-            session.title === "New Chat" && session.messages.length === 0
-              ? content.slice(0, 40) + (content.length > 40 ? "..." : "")
-              : session.title,
-        };
-
-        nextSessions = nextSessions.map((item) => (item.id === targetSessionId ? updatedSession : item));
-        saveSessions(nextSessions);
-
-        postWorkerMessage(workerRef.current, {
-          type: "generate",
-          payload: { sessionId: targetSessionId, messages: buildWorkerMessages(updatedSession) },
-        });
-
-        return nextSessions;
+        return prev.map((s) =>
+          s.id === targetSessionId
+            ? {
+                ...s,
+                messages: [...s.messages, userMessage, assistantMessage],
+                title: s.title === "New Chat" ? content.slice(0, 40) + (content.length > 40 ? "..." : "") : s.title,
+                updatedAt: Date.now(),
+              }
+            : s
+        );
       });
 
       setIsGenerating(true);
+      abortControllerRef.current = new AbortController();
+
+      try {
+        const session = sessions.find(s => s.id === targetSessionId) || currentSession;
+        const apiMessages = [
+          { role: "system" as const, content: SYSTEM_PROMPT_CONTENT },
+          ...session.messages.map(m => ({ role: m.role, content: m.content })),
+          { role: "user" as const, content }
+        ];
+
+        const stream = generateStream(
+          apiMessages,
+          {
+            provider: settings.provider,
+            apiKey: settings.apiKey,
+            model: settings.model,
+          },
+          abortControllerRef.current.signal
+        );
+
+        let fullContent = "";
+        for await (const chunk of stream) {
+          fullContent += chunk;
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === targetSessionId
+                ? {
+                    ...s,
+                    messages: s.messages.map((m, idx) =>
+                      idx === s.messages.length - 1 ? { ...m, content: fullContent } : m
+                    ),
+                  }
+                : s
+            )
+          );
+        }
+
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === targetSessionId
+              ? {
+                  ...s,
+                  messages: s.messages.map((m, idx) =>
+                    idx === s.messages.length - 1 ? { ...m, isStreaming: false } : m
+                  ),
+                }
+              : s
+          )
+        );
+      } catch (error: any) {
+        console.error("Failed to generate response:", error);
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === targetSessionId
+              ? {
+                  ...s,
+                  messages: s.messages.map((m, idx) =>
+                    idx === s.messages.length - 1
+                      ? { ...m, content: `Error: ${error.message || "Unknown error"}`, isStreaming: false }
+                      : m
+                  ),
+                }
+              : s
+          )
+        );
+      } finally {
+        setIsGenerating(false);
+        abortControllerRef.current = null;
+      }
     },
-    [activeSessionId, isGenerating, modelProgress.status]
+    [activeSessionId, sessions, currentSession, settings, isGenerating]
   );
 
   const stopGeneration = useCallback(() => {
-    postWorkerMessage(workerRef.current, { type: "stop" });
-    setIsGenerating(false);
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setIsGenerating(false);
+    }
   }, []);
 
   const createNewChat = useCallback(() => {
     const session = createDefaultSession();
-    setSessions((previousSessions) => {
-      const nextSessions = [session, ...previousSessions];
-      saveSessions(nextSessions);
-      return nextSessions;
-    });
+    setSessions((prev) => [session, ...prev]);
     setActiveSessionId(session.id);
-    activeSessionIdRef.current = session.id;
-    localStorage.setItem(ACTIVE_SESSION_KEY, session.id);
   }, []);
 
   const switchSession = useCallback((id: string) => {
     setActiveSessionId(id);
-    activeSessionIdRef.current = id;
-    localStorage.setItem(ACTIVE_SESSION_KEY, id);
   }, []);
 
-  const deleteSession = useCallback(
-    (id: string) => {
-      setSessions((previousSessions) => {
-        const filteredSessions = previousSessions.filter((session) => session.id !== id);
-        const nextSessions = filteredSessions.length > 0 ? filteredSessions : [createDefaultSession()];
-        const nextActiveId = activeSessionId === id ? nextSessions[0].id : activeSessionId;
-
-        saveSessions(nextSessions);
-        setActiveSessionId(nextActiveId);
-        activeSessionIdRef.current = nextActiveId;
-        localStorage.setItem(ACTIVE_SESSION_KEY, nextActiveId);
-        return nextSessions;
-      });
-    },
-    [activeSessionId]
-  );
+  const deleteSession = useCallback((id: string) => {
+    setSessions((prev) => {
+      const filtered = prev.filter((s) => s.id !== id);
+      if (filtered.length === 0) return [createDefaultSession()];
+      return filtered;
+    });
+    setActiveSessionId((prev) => (prev === id ? "" : prev));
+  }, []);
 
   const clearAllSessions = useCallback(() => {
     const session = createDefaultSession();
     setSessions([session]);
-    saveSessions([session]);
     setActiveSessionId(session.id);
-    activeSessionIdRef.current = session.id;
-    localStorage.setItem(ACTIVE_SESSION_KEY, session.id);
   }, []);
 
   const retryLastMessage = useCallback(() => {
-    const session = sessions.find((item) => item.id === activeSessionId);
-    if (!session || !workerRef.current || isGenerating || modelProgress.status !== "ready") return;
+    const session = sessions.find((s) => s.id === activeSessionId);
+    if (!session || isGenerating) return;
 
-    setSessions((previousSessions) => {
-      const targetSession = previousSessions.find((item) => item.id === activeSessionId);
-      if (!targetSession) return previousSessions;
+    const lastUserMessage = [...session.messages].reverse().find((m) => m.role === "user");
+    if (!lastUserMessage) return;
 
-      const lastAssistantIndex = [...targetSession.messages]
-        .reverse()
-        .findIndex((message) => message.role === "assistant");
-      if (lastAssistantIndex < 0) return previousSessions;
+    // Remove last assistant message if it exists
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id === activeSessionId
+          ? {
+              ...s,
+              messages: s.messages.filter((m, idx) => idx !== s.messages.length - 1 || m.role !== "assistant"),
+            }
+          : s
+      )
+    );
 
-      const removeIndex = targetSession.messages.length - 1 - lastAssistantIndex;
-      const previousMessage = targetSession.messages[removeIndex - 1];
-      if (!previousMessage || previousMessage.role !== "user") return previousSessions;
-
-      const assistantMessage: ChatMessage = {
-        id: generateId(),
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-        isStreaming: true,
-      };
-
-      const updatedSession = {
-        ...targetSession,
-        messages: targetSession.messages.slice(0, removeIndex).concat(assistantMessage),
-        updatedAt: Date.now(),
-      };
-
-      const nextSessions = previousSessions.map((item) => (item.id === activeSessionId ? updatedSession : item));
-      saveSessions(nextSessions);
-
-      postWorkerMessage(workerRef.current, {
-        type: "generate",
-        payload: { sessionId: activeSessionId, messages: buildWorkerMessages(updatedSession) },
-      });
-
-      return nextSessions;
-    });
-
-    setIsGenerating(true);
-  }, [activeSessionId, sessions, isGenerating, modelProgress.status]);
+    sendMessage(lastUserMessage.content);
+  }, [activeSessionId, sessions, isGenerating, sendMessage]);
 
   return {
     sessions,
@@ -434,6 +351,8 @@ export function useChat() {
     currentSession,
     modelProgress,
     isGenerating,
+    settings,
+    updateSettings,
     sendMessage,
     stopGeneration,
     createNewChat,
@@ -441,5 +360,7 @@ export function useChat() {
     deleteSession,
     clearAllSessions,
     retryLastMessage,
+    initModel: () => {}, // No-op in 2.0
   };
 }
+
