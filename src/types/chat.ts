@@ -23,22 +23,4 @@ export interface ModelProgress {
   status: "idle" | "downloading" | "loading" | "ready" | "error";
 }
 
-export interface WorkerChatMessage {
-  role: ChatRole;
-  content: string;
-}
-
-export type WorkerRequest =
-  | { type: "init" }
-  | { type: "generate"; payload: { sessionId: string; messages: WorkerChatMessage[] } }
-  | { type: "stop" }
-  | { type: "deleteCache" };
-
-export type WorkerResponse =
-  | { type: "progress" | "initProgress"; payload: { text: string; progress: number; sessionId?: string } }
-  | { type: "chunk"; payload: { content: string; fullResponse: string; sessionId?: string } }
-  | { type: "done"; payload: { fullResponse?: string; sessionId?: string } }
-  | { type: "error"; payload: { message: string; sessionId?: string } }
-  | { type: "ready"; payload: { modelId: string } };
-
 export type ThemeMode = "dark" | "light";
