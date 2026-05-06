@@ -15,13 +15,14 @@ const SETTINGS_KEY = "hybrid-chat-settings";
 const SYSTEM_PROMPT_CONTENT = `Ты — Senior Game Architect и Protocol Designer. Твоя задача — помочь создать 2D игру с глубокой архитектурной проработкой.
 Отвечай ВСЕГДА на русском языке.
 
-Твой ответ должен быть структурирован на 4 части:
+Если пользователь просто здоровается или пишет коротко — ответь кратко и спроси, какую игру он хочет создать. 
+Если идет обсуждение игры, структурируй ответ на 4 части:
 1. КОНЦЕПТ: Краткое описание мира, героя и врагов.
 2. АРХИТЕКТУРА: Основные механики игры и структуры данных.
 3. ПРОТОКОЛ: Логика синхронизации состояний или игровых событий (JSON/Binary).
 4. КОД: Примеры реализации или паттерны на TypeScript/Javascript.
 
-Будь кратким, но технически точным. Помогай с архитектурой протокола так, чтобы игру можно было легко расширять.`;
+Будь технически точным. Помогай с архитектурой протокола так, чтобы игру можно было легко расширять.`;
 
 // Removed unused SYSTEM_PROMPT
 
@@ -264,21 +265,37 @@ export function useChat() {
           )
         );
       } catch (error: any) {
-        console.error("Failed to generate response:", error);
-        setSessions((prev) =>
-          prev.map((s) =>
-            s.id === targetSessionId
-              ? {
-                  ...s,
-                  messages: s.messages.map((m, idx) =>
-                    idx === s.messages.length - 1
-                      ? { ...m, content: `Error: ${error.message || "Unknown error"}`, isStreaming: false }
-                      : m
-                  ),
-                }
-              : s
-          )
-        );
+        if (error.name === 'AbortError') {
+          // Preserve what we have
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === targetSessionId
+                ? {
+                    ...s,
+                    messages: s.messages.map((m, idx) =>
+                      idx === s.messages.length - 1 ? { ...m, isStreaming: false } : m
+                    ),
+                  }
+                : s
+            )
+          );
+        } else {
+          console.error("Failed to generate response:", error);
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === targetSessionId
+                ? {
+                    ...s,
+                    messages: s.messages.map((m, idx) =>
+                      idx === s.messages.length - 1
+                        ? { ...m, content: `${m.content}\n\n[Error: ${error.message || "Unknown error"}]`, isStreaming: false }
+                        : m
+                    ),
+                  }
+                : s
+            )
+          );
+        }
       } finally {
         setIsGenerating(false);
         abortControllerRef.current = null;

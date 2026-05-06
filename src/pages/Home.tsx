@@ -29,7 +29,15 @@ export default function Home() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (bottomRef.current) {
+    if (!bottomRef.current || !scrollRef.current) return;
+    
+    const scrollContainer = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]');
+    if (!scrollContainer) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
+
+    if (isAtBottom || (currentSession.messages.length > 0 && currentSession.messages[currentSession.messages.length - 1].role === 'user')) {
       bottomRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [currentSession.messages, isGenerating]);
