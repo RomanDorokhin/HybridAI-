@@ -5,7 +5,8 @@ import type {
   ChatSession,
   ModelProgress,
 } from "@/types/chat";
-import { generateStream, APIProvider, LLMConfig } from "@/lib/llm-api";
+import type { APIProvider } from "@/lib/llm-api";
+import { generateStream } from "@/lib/llm-api";
 
 const STORAGE_KEY = "hybrid-chat-sessions-v2";
 const ACTIVE_SESSION_KEY = "hybrid-chat-active-session-v2";
@@ -22,12 +23,7 @@ const SYSTEM_PROMPT_CONTENT = `Ты — Senior Game Architect и Protocol Design
 
 Будь кратким, но технически точным. Помогай с архитектурой протокола так, чтобы игру можно было легко расширять.`;
 
-const SYSTEM_PROMPT: ChatMessage = {
-  id: "system",
-  role: "system",
-  content: SYSTEM_PROMPT_CONTENT,
-  timestamp: Date.now(),
-};
+// Removed unused SYSTEM_PROMPT
 
 interface ChatSettings {
   provider: APIProvider;
@@ -123,7 +119,7 @@ export function useChat() {
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [settings, setSettings] = useState<ChatSettings>(loadSettings);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [modelProgress, setModelProgress] = useState<ModelProgress>({
+  const [modelProgress] = useState<ModelProgress>({
     progress: 100,
     text: "API Ready",
     status: "ready",
