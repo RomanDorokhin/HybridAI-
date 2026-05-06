@@ -2,7 +2,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Copy, Check, User, Bot, RotateCcw } from "lucide-react";
+import { Copy, Check, User, Bot, RotateCcw, Play, X } from "lucide-react";
 import type { ChatMessage } from "@/types/chat";
 
 interface ChatMessageItemProps {
@@ -12,8 +12,12 @@ interface ChatMessageItemProps {
 
 export function ChatMessageItem({ message, onRetry }: ChatMessageItemProps) {
   const [copied, setCopied] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const isUser = message.role === "user";
   const isStreaming = message.isStreaming;
+
+  const htmlCode = message.content.match(/```html\s*([\s\S]*?)```/)?.[1] || 
+                   (message.content.includes('<html>') ? message.content : null);
 
   const handleCopy = async () => {
     try {
@@ -26,7 +30,7 @@ export function ChatMessageItem({ message, onRetry }: ChatMessageItemProps) {
   };
 
   return (
-    <div className={`flex gap-4 py-6 px-4 ${isUser ? "bg-transparent" : "bg-card/50"}`}>
+    <div className={`group flex gap-4 py-6 px-4 ${isUser ? "bg-transparent" : "bg-card/50"}`}>
       <div className="flex-shrink-0">
         <div
           className={`w-8 h-8 rounded-lg flex items-center justify-center ${
@@ -41,7 +45,7 @@ export function ChatMessageItem({ message, onRetry }: ChatMessageItemProps) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1.5">
           <span className="text-sm font-medium text-foreground">
-            {isUser ? "You" : "HybridAI 2.0"}
+            {isUser ? "You" : "Smol-agent"}
           </span>
           <span className="text-xs text-muted-foreground">
             {new Date(message.timestamp).toLocaleTimeString([], {
@@ -94,6 +98,40 @@ export function ChatMessageItem({ message, onRetry }: ChatMessageItemProps) {
                 <span className="ml-1">Retry</span>
               </Button>
             )}
+            {htmlCode && (
+              <Button
+                variant="default"
+                size="sm"
+                className="h-7 px-2 text-xs bg-primary/20 text-primary hover:bg-primary/30 border-none ml-2"
+                onClick={() => setShowPreview(true)}
+              >
+                <Play size={12} fill="currentColor" />
+                <span className="ml-1 font-bold italic">PLAY PROTOTYPE</span>
+              </Button>
+            )}
+          </div>
+        )}
+
+        {showPreview && htmlCode && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <div className="relative w-full max-w-5xl aspect-video bg-white rounded-2xl overflow-hidden shadow-2xl border border-white/10">
+              <div className="absolute top-4 right-4 z-50">
+                <Button 
+                  variant="destructive" 
+                  size="sm" 
+                  className="rounded-full w-8 h-8 p-0"
+                  onClick={() => setShowPreview(false)}
+                >
+                  <X size={16} />
+                </Button>
+              </div>
+              <iframe
+                title="Game Preview"
+                srcDoc={htmlCode.includes('<!DOCTYPE') ? htmlCode : `<!DOCTYPE html><html><body style="margin:0;overflow:hidden;background:#000;">${htmlCode}</body></html>`}
+                className="w-full h-full border-none bg-black"
+                sandbox="allow-scripts allow-modals"
+              />
+            </div>
           </div>
         )}
       </div>
